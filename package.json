@@ -1,0 +1,52 @@
+{
+  "name": "react-native-reuse-finder",
+  "version": "1.0.0",
+  "description": "Detect reusable/duplicate React Native code (components, hooks, styles, utils) and suggest refactors. Ships as a CLI + Node API.",
+  "main": "dist/index.js",
+  "bin": {
+    "rn-reuse-finder": "dist/cli.js"
+  },
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "react-native",
+    "code-duplication",
+    "refactor",
+    "ast",
+    "babel",
+    "typescript",
+    "jsx",
+    "code-analysis",
+    "code-quality"
+  ],
+  "author": "Anurag Kumar Singh <anurag.kr.singh07@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Anu-Code07/react-native-reuse-finder.git"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.24.0",
+    "@babel/traverse": "^7.24.0",
+    "@babel/types": "^7.24.0",
+    "commander": "^12.0.0",
+    "chalk": "^5.3.0",
+    "glob": "^10.3.10",
+    "simple-git": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts"
+  ]
+}
