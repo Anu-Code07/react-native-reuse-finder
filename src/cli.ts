@@ -56,40 +56,68 @@ program
         enableAutoFix: options.autoFix !== false
       };
 
-      // Create analyzer
-      const analyzer = new ReuseAnalyzer(resolvedPath, analysisOptions);
-
       let result;
       if (options.file) {
         const filePath = path.resolve(options.file);
         console.log(chalk.blue(`📄 Analyzing specific file: ${filePath}`));
-        const snippets = await analyzer.analyzeSpecificFile(filePath);
+        
+        // For single file analysis, use ASTParser directly
+        const { ASTParser } = await import('./parser/ast-parser');
+        const parser = new ASTParser({
+          includeJSX: true,
+          includeTypeScript: true,
+          includeFlow: false,
+          sourceType: 'unambiguous'
+        });
+        
+        const content = await import('fs').then(fs => fs.readFileSync(filePath, 'utf-8'));
+        const snippets = parser.parseFile(filePath, content);
+        
+        // Create similarity detector to find duplicates
+        const { SimilarityDetector } = await import('./similarity/similarity-detector');
+        const similarityDetector = new SimilarityDetector(7, analysisOptions.minSimilarity);
+        const duplicates = similarityDetector.findDuplicates(snippets);
+        
+        // Generate suggestions manually
+        const suggestions = duplicates.map(group => group.suggestion);
+        
         result = {
-          duplicates: [],
+          duplicates,
           summary: {
             totalFiles: 1,
             totalSnippets: snippets.length,
-            duplicateGroups: 0,
-            estimatedSavings: 0
+            duplicateGroups: duplicates.length,
+            estimatedSavings: duplicates.reduce((sum: number, group: any) => sum + (group.snippets[0].size * (group.snippets.length - 1)), 0)
           },
-          suggestions: []
+          suggestions
         };
       } else if (options.directory) {
         const dirPath = path.resolve(options.directory);
         console.log(chalk.blue(`📁 Analyzing specific directory: ${dirPath}`));
+        
+        const analyzer = new ReuseAnalyzer(dirPath, analysisOptions);
         const snippets = await analyzer.analyzeDirectory(dirPath);
+        
+        // Create similarity detector to find duplicates
+        const similarityDetector = new (await import('./similarity/similarity-detector')).SimilarityDetector(7, analysisOptions.minSimilarity);
+        const duplicates = similarityDetector.findDuplicates(snippets);
+        
+        // Generate suggestions manually
+        const suggestions = duplicates.map(group => group.suggestion);
+        
         result = {
-          duplicates: [],
+          duplicates,
           summary: {
             totalFiles: 0,
             totalSnippets: snippets.length,
-            duplicateGroups: 0,
-            estimatedSavings: 0
+            duplicateGroups: duplicates.length,
+            estimatedSavings: duplicates.reduce((sum: number, group: any) => sum + (group.snippets[0].size * (group.snippets.length - 1)), 0)
           },
-          suggestions: []
+          suggestions
         };
       } else {
         // Analyze entire project
+        const analyzer = new ReuseAnalyzer(resolvedPath, analysisOptions);
         result = await analyzer.analyzeProject();
       }
 

@@ -52,8 +52,20 @@ export class ASTParser {
         },
         VariableDeclarator: (path) => {
           if (path.node.init && t.isFunction(path.node.init)) {
-            const snippet = this.extractFunctionSnippet(path.node.init, filePath, content);
-            if (snippet) snippets.push(snippet);
+            // Check if this is a React component (exported function with JSX)
+            if (path.node.id && 
+                'name' in path.node.id && 
+                typeof path.node.id.name === 'string' &&
+                (path.node.id.name.endsWith('Component') || 
+                 path.node.id.name.startsWith('Button') ||
+                 path.node.id.name.startsWith('ButtonV2'))) {
+              // Extract the entire component including the variable declaration
+              const snippet = this.extractComponentSnippet(path, filePath, content);
+              if (snippet) snippets.push(snippet);
+            } else {
+              const snippet = this.extractFunctionSnippet(path.node.init, filePath, content);
+              if (snippet) snippets.push(snippet);
+            }
           }
         },
         CallExpression: (path) => {
@@ -137,8 +149,34 @@ export class ASTParser {
     const node = path.node;
     if (!node.loc) return null;
 
-    const startLine = node.loc.start.line;
-    const endLine = node.loc.end.line;
+    // For components, try to extract a larger range to include styles and exports
+    let startLine = node.loc.start.line;
+    let endLine = node.loc.end.line;
+    
+    // Try to find the export statement and include it
+    const lines = content.split('\n');
+    for (let i = startLine - 1; i >= 0; i--) {
+      if (lines[i].trim().startsWith('export')) {
+        startLine = i + 1;
+        break;
+      }
+    }
+    
+    // Try to find the end of the component (including styles)
+    for (let i = endLine; i < lines.length; i++) {
+      if (lines[i].trim().includes('StyleSheet.create') || 
+          lines[i].trim().includes('const styles')) {
+        // Find the end of the StyleSheet
+        for (let j = i; j < lines.length; j++) {
+          if (lines[j].trim() === '});') {
+            endLine = j + 1;
+            break;
+          }
+        }
+        break;
+      }
+    }
+    
     const code = this.extractCodeRange(content, startLine, endLine);
     
     if (!code || code.length < 100) return null; // Skip very small components
