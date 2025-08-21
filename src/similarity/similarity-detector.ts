@@ -59,19 +59,36 @@ export class SimilarityDetector {
     target: CodeSnippet, 
     allSnippets: CodeSnippet[], 
     startIndex: number
-  ): DuplicateGroup {
+  ): DuplicateGroup | null {
     const similar: CodeSnippet[] = [target];
     let totalSimilarity = 1.0;
 
     for (let i = startIndex + 1; i < allSnippets.length; i++) {
       const snippet = allSnippets[i];
       if (snippet.type !== target.type) continue;
+      
+      // Skip if this is the same snippet (same file, same lines)
+      if (snippet.id === target.id) continue;
+      
+      // Skip if this is the same content in the same file
+      if (snippet.filePath === target.filePath && 
+          snippet.startLine === target.startLine && 
+          snippet.endLine === target.endLine) continue;
+      
+      // Skip if this is essentially the same location (within a few lines)
+      if (snippet.filePath === target.filePath && 
+          Math.abs(snippet.startLine - target.startLine) < 5) continue;
 
       const similarity = this.calculateSimilarity(target, snippet);
       if (similarity >= this.minSimilarity) {
         similar.push(snippet);
         totalSimilarity += similarity;
       }
+    }
+
+    // Only return a group if we found actual duplicates (more than 1 snippet)
+    if (similar.length <= 1) {
+      return null;
     }
 
     const avgSimilarity = totalSimilarity / similar.length;
@@ -303,9 +320,20 @@ export class SimilarityDetector {
       if (processed.has(snippets[i].id)) continue;
 
       const group = this.findSimilarSnippets(snippets[i], snippets, i);
-      if (group.snippets.length > 1) {
-        groups.push(group);
-        group.snippets.forEach(snippet => processed.add(snippet.id));
+      if (group && group.snippets.length > 1) { // Only add if group exists and has duplicates
+        // Additional check: ensure we don't have the same snippet multiple times
+        const uniqueSnippets = group.snippets.filter((snippet, index, arr) => 
+          arr.findIndex(s => s.id === snippet.id) === index
+        );
+        
+        if (uniqueSnippets.length > 1) {
+          const updatedGroup = {
+            ...group,
+            snippets: uniqueSnippets
+          };
+          groups.push(updatedGroup);
+          uniqueSnippets.forEach(snippet => processed.add(snippet.id));
+        }
       }
     }
 

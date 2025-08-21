@@ -120,6 +120,23 @@ program
             }
           };
         }
+        
+        // Output results for file analysis
+        outputResults(result, options.output, options.outputFile);
+        
+        // Generate pure reusable code file for file analysis
+        if (result.duplicates.length > 0) {
+          const pureCode = generatePureCode(result);
+          const pureCodeFileName = 'reusable-components.tsx';
+          
+          try {
+            const fs = require('fs');
+            fs.writeFileSync(pureCodeFileName, pureCode);
+            console.log(chalk.green(`\n📦 Reusable components saved to: ${pureCodeFileName}`));
+          } catch (error) {
+            console.error(chalk.red(`\n❌ Failed to write reusable components file: ${error}`));
+          }
+        }
       } else if (options.directory) {
         const dirPath = path.resolve(options.directory);
         console.log(chalk.blue(`📁 Analyzing specific directory: ${dirPath}`));
@@ -144,14 +161,45 @@ program
           },
           suggestions
         };
+        
+        // Output results for directory analysis
+        outputResults(result, options.output, options.outputFile);
+        
+        // Generate pure reusable code file for directory analysis
+        if (result.duplicates.length > 0) {
+          const pureCode = generatePureCode(result);
+          const pureCodeFileName = 'reusable-components.tsx';
+          
+          try {
+            const fs = require('fs');
+            fs.writeFileSync(pureCodeFileName, pureCode);
+            console.log(chalk.green(`\n📦 Reusable components saved to: ${pureCodeFileName}`));
+          } catch (error) {
+            console.error(chalk.red(`\n❌ Failed to write reusable components file: ${error}`));
+          }
+        }
       } else {
         // Analyze entire project
         const analyzer = new ReuseAnalyzer(resolvedPath, analysisOptions);
         result = await analyzer.analyzeProject();
       }
 
-      // Output results
-      outputResults(result, options.output, options.outputFile);
+          // Output results
+    outputResults(result, options.output, options.outputFile);
+    
+    // Always generate a pure reusable code file alongside the CLI output
+    if (result.duplicates.length > 0) {
+      const pureCode = generatePureCode(result);
+      const pureCodeFileName = 'reusable-components.tsx';
+      
+      try {
+        const fs = require('fs');
+        fs.writeFileSync(pureCodeFileName, pureCode);
+        console.log(chalk.green(`\n📦 Reusable components saved to: ${pureCodeFileName}`));
+      } catch (error) {
+        console.error(chalk.red(`\n❌ Failed to write reusable components file: ${error}`));
+      }
+    }
 
     } catch (error) {
       console.error(chalk.red('Error during analysis:'), error);
@@ -275,6 +323,67 @@ function outputCode(result: any): string {
   return output;
 }
 
+function generatePureCode(result: any): string {
+  let output = '';
+  
+  if (result.duplicates.length === 0) {
+    return '// No reusable components found to extract.\n';
+  }
+  
+  // Add necessary imports at the top
+  const allImports = new Set<string>();
+  allImports.add("import React from 'react';");
+  
+  // Collect all React Native imports needed
+  const rnImports = new Set<string>();
+  result.duplicates.forEach((group: any) => {
+    const firstSnippet = group.snippets[0];
+    const imports = extractReactNativeImports(firstSnippet.content);
+    imports.forEach(imp => rnImports.add(imp));
+  });
+  
+  if (rnImports.size > 0) {
+    allImports.add(`import { ${Array.from(rnImports).join(', ')} } from 'react-native';`);
+  }
+  
+  // Add imports
+  allImports.forEach(imp => {
+    output += imp + '\n';
+  });
+  output += '\n';
+  
+  // Group duplicates by type for better organization
+  const duplicatesByType = new Map();
+  result.duplicates.forEach((group: any) => {
+    const type = group.snippets[0].type;
+    if (!duplicatesByType.has(type)) {
+      duplicatesByType.set(type, []);
+    }
+    duplicatesByType.get(type).push(group);
+  });
+  
+  // Generate clean code for each type
+  let globalIndex = 0;
+  for (const [type, groups] of duplicatesByType) {
+    if (groups.length > 0) {
+      output += `// ========== ${type.toUpperCase()}S ==========\n\n`;
+    }
+    
+    groups.forEach((group: any) => {
+      const firstSnippet = group.snippets[0];
+      const componentName = generateComponentName(firstSnippet, globalIndex);
+      globalIndex++;
+      
+      // Generate clean, reusable code
+      const cleanCode = generateCleanRefactoredCode(firstSnippet, componentName);
+      output += cleanCode;
+      output += '\n\n';
+    });
+  }
+  
+  return output;
+}
+
 function generateComponentName(snippet: any, index: number): string {
   // Try to extract component name from content
   const content = snippet.content;
@@ -285,6 +394,66 @@ function generateComponentName(snippet: any, index: number): string {
   
   // Fallback to generic name
   return `${snippet.type.charAt(0).toUpperCase() + snippet.type.slice(1)}${index + 1}`;
+}
+
+function generateCleanRefactoredCode(snippet: any, componentName: string): string {
+  const content = snippet.content;
+  const type = snippet.type;
+  
+  // Clean the component code - remove export, comments, and make it generic
+  let cleanCode = content
+    .replace(/export\s+/, '')
+    .replace(/import\s+.*?from\s+['"][^'"]*['"];?\s*/g, '')
+    .replace(/\/\/.*$/gm, '') // Remove single-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
+    .trim();
+  
+  // Ensure proper spacing
+  cleanCode = cleanCode.replace(/\n{3,}/g, '\n\n');
+  
+  let output = '';
+  
+  if (type === 'component') {
+    // For components, try to extract the component definition properly
+    const componentMatch = content.match(/(?:const|function)\s+(\w+)\s*=.*?(?:\{[\s\S]*?\}\s*;|=>[\s\S]*?;)/);
+    if (componentMatch) {
+      // Use the full component definition
+      output = componentMatch[0];
+      // Replace component name with generic name
+      output = output.replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+    } else {
+      // Fallback: try to wrap JSX content as a component
+      if (content.includes('<') && content.includes('>')) {
+        output = `const ${componentName} = ({ title, onPress }) => {\n  return (\n    ${cleanCode}\n  );\n};`;
+      } else {
+        output = `const ${componentName} = ${cleanCode}`;
+      }
+    }
+  } else if (type === 'hook') {
+    // For hooks, extract the hook definition
+    const hookMatch = content.match(/(?:const|function)\s+(\w+)\s*=.*?(?:\{[\s\S]*?\}|=>[\s\S]*?;)/);
+    if (hookMatch) {
+      output = hookMatch[0];
+      output = output.replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+    } else {
+      output = `const ${componentName} = ${cleanCode}`;
+    }
+  } else if (type === 'stylesheet') {
+    // For stylesheets, create a clean StyleSheet.create
+    output = `const ${componentName} = StyleSheet.create(${cleanCode});`;
+  } else {
+    // For other types (functions, utilities), wrap appropriately
+    if (cleanCode.includes('=>') || cleanCode.includes('function')) {
+      output = cleanCode.includes('const ') ? cleanCode : `const ${componentName} = ${cleanCode}`;
+    } else {
+      output = `const ${componentName} = ${cleanCode};`;
+    }
+  }
+  
+  // Add export statement at the end
+  output += `\n\nexport { ${componentName} };`;
+  
+  return output;
 }
 
 function generateRefactoredComponent(snippet: any, componentName: string, duplicateCount: number): string {

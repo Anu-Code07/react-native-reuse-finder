@@ -32,19 +32,26 @@ export class ASTParser {
       });
 
       const snippets: CodeSnippet[] = [];
+      const extractedLocations = new Set<string>(); // Track already extracted locations
       
       traverse(ast, {
         FunctionDeclaration: (path) => {
           if (snippets.length >= this.maxSnippets) return;
           const snippet = this.extractFunctionSnippet(path, filePath, content);
-          if (snippet) snippets.push(snippet);
+          if (snippet && !extractedLocations.has(snippet.id)) {
+            snippets.push(snippet);
+            extractedLocations.add(snippet.id);
+          }
         },
         FunctionExpression: (path) => {
           if (snippets.length >= this.maxSnippets) return;
           // Only extract if this is a top-level function expression, not nested
           if (!path.parent || !t.isFunction(path.parent)) {
             const snippet = this.extractFunctionSnippet(path, filePath, content);
-            if (snippet) snippets.push(snippet);
+            if (snippet && !extractedLocations.has(snippet.id)) {
+              snippets.push(snippet);
+              extractedLocations.add(snippet.id);
+            }
           }
         },
         ArrowFunctionExpression: (path) => {
@@ -52,7 +59,10 @@ export class ASTParser {
           // Only extract if this is a top-level arrow function, not nested
           if (!path.parent || !t.isFunction(path.parent)) {
             const snippet = this.extractFunctionSnippet(path, filePath, content);
-            if (snippet) snippets.push(snippet);
+            if (snippet && !extractedLocations.has(snippet.id)) {
+              snippets.push(snippet);
+              extractedLocations.add(snippet.id);
+            }
           }
         },
         VariableDeclarator: (path) => {
@@ -67,10 +77,16 @@ export class ASTParser {
                  path.node.id.name.startsWith('ButtonV2'))) {
               // Extract the entire component including the variable declaration
               const snippet = this.extractComponentSnippet(path, filePath, content);
-              if (snippet) snippets.push(snippet);
+              if (snippet && !extractedLocations.has(snippet.id)) {
+                snippets.push(snippet);
+                extractedLocations.add(snippet.id);
+              }
             } else {
               const snippet = this.extractFunctionSnippet(path.node.init, filePath, content);
-              if (snippet) snippets.push(snippet);
+              if (snippet && !extractedLocations.has(snippet.id)) {
+                snippets.push(snippet);
+                extractedLocations.add(snippet.id);
+              }
             }
           }
         },
@@ -78,7 +94,10 @@ export class ASTParser {
           if (snippets.length >= this.maxSnippets) return;
           if (this.isStyleSheetCreate(path)) {
             const snippet = this.extractStyleSheetSnippet(path, filePath, content);
-            if (snippet) snippets.push(snippet);
+            if (snippet && !extractedLocations.has(snippet.id)) {
+              snippets.push(snippet);
+              extractedLocations.add(snippet.id);
+            }
           }
         },
         JSXElement: (path) => {
@@ -86,7 +105,10 @@ export class ASTParser {
           // Only extract if this is a top-level JSX element, not nested
           if (!path.parent || !t.isJSXElement(path.parent)) {
             const snippet = this.extractComponentSnippet(path, filePath, content);
-            if (snippet) snippets.push(snippet);
+            if (snippet && !extractedLocations.has(snippet.id)) {
+              snippets.push(snippet);
+              extractedLocations.add(snippet.id);
+            }
           }
         }
       });
