@@ -1,6 +1,6 @@
 {
   "name": "react-native-reuse-finder",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Detect reusable/duplicate React Native code (components, hooks, styles, utils) and suggest refactors. Ships as a CLI + Node API.",
   "main": "dist/index.js",
   "bin": {

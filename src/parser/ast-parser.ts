@@ -98,6 +98,36 @@ export class ASTParser {
     }
   }
 
+  private extractComponentSnippet(path: any, filePath: string, content: string): CodeSnippet | null {
+    const node = path.node;
+    if (!node.loc) return null;
+
+    // For components, extract only the component itself, not the entire file
+    const startLine = node.loc.start.line;
+    const endLine = node.loc.end.line;
+    
+    // Extract only the component code, not expanding to include styles or exports
+    const code = this.extractCodeRange(content, startLine, endLine);
+    
+    if (!code || code.length < 50) return null; // Skip very small components
+
+    const normalizedContent = this.normalizeCode(code);
+    
+    return {
+      id: `${filePath}:${startLine}-${endLine}`,
+      content: code,
+      normalizedContent,
+      type: SnippetType.COMPONENT,
+      filePath,
+      startLine,
+      endLine,
+      size: code.length,
+      hash: this.generateHash(normalizedContent),
+      simHash: this.generateSimHash(normalizedContent),
+      churnWeight: 1.0 // Will be updated by churn analyzer
+    };
+  }
+
   private extractFunctionSnippet(path: any, filePath: string, content: string): CodeSnippet | null {
     const node = path.node;
     if (!node || !node.body || !node.loc) return null;
@@ -106,7 +136,7 @@ export class ASTParser {
     const endLine = node.loc.end.line;
     const code = this.extractCodeRange(content, startLine, endLine);
     
-    if (!code || code.length < 50) return null; // Skip very small functions
+    if (!code || code.length < 30) return null; // Skip very small functions
 
     const snippetType = this.determineFunctionType(path);
     const normalizedContent = this.normalizeCode(code);
@@ -143,59 +173,6 @@ export class ASTParser {
       content: code,
       normalizedContent,
       type: SnippetType.STYLESHEET,
-      filePath,
-      startLine,
-      endLine,
-      size: code.length,
-      hash: this.generateHash(normalizedContent),
-      simHash: this.generateSimHash(normalizedContent),
-      churnWeight: 1.0
-    };
-  }
-
-  private extractComponentSnippet(path: any, filePath: string, content: string): CodeSnippet | null {
-    const node = path.node;
-    if (!node.loc) return null;
-
-    // For components, try to extract a larger range to include styles and exports
-    let startLine = node.loc.start.line;
-    let endLine = node.loc.end.line;
-    
-    // Try to find the export statement and include it
-    const lines = content.split('\n');
-    for (let i = startLine - 1; i >= 0; i--) {
-      if (lines[i].trim().startsWith('export')) {
-        startLine = i + 1;
-        break;
-      }
-    }
-    
-    // Try to find the end of the component (including styles)
-    for (let i = endLine; i < lines.length; i++) {
-      if (lines[i].trim().includes('StyleSheet.create') || 
-          lines[i].trim().includes('const styles')) {
-        // Find the end of the StyleSheet
-        for (let j = i; j < lines.length; j++) {
-          if (lines[j].trim() === '});') {
-            endLine = j + 1;
-            break;
-          }
-        }
-        break;
-      }
-    }
-    
-    const code = this.extractCodeRange(content, startLine, endLine);
-    
-    if (!code || code.length < 100) return null; // Skip very small components
-
-    const normalizedContent = this.normalizeCode(code);
-    
-    return {
-      id: `${filePath}:${startLine}-${endLine}`,
-      content: code,
-      normalizedContent,
-      type: SnippetType.COMPONENT,
       filePath,
       startLine,
       endLine,
