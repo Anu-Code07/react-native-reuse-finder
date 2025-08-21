@@ -5,14 +5,16 @@ import { CodeSnippet, SnippetType, ParserOptions } from '../types';
 
 export class ASTParser {
   private options: ParserOptions;
+  private maxSnippets: number;
 
   constructor(options: ParserOptions = {
     includeJSX: true,
     includeTypeScript: true,
     includeFlow: false,
     sourceType: 'unambiguous'
-  }) {
+  }, maxSnippets: number = 50) {
     this.options = options;
+    this.maxSnippets = maxSnippets;
   }
 
   parseFile(filePath: string, content: string): CodeSnippet[] {
@@ -33,10 +35,12 @@ export class ASTParser {
       
       traverse(ast, {
         FunctionDeclaration: (path) => {
+          if (snippets.length >= this.maxSnippets) return;
           const snippet = this.extractFunctionSnippet(path, filePath, content);
           if (snippet) snippets.push(snippet);
         },
         FunctionExpression: (path) => {
+          if (snippets.length >= this.maxSnippets) return;
           // Only extract if this is a top-level function expression, not nested
           if (!path.parent || !t.isFunction(path.parent)) {
             const snippet = this.extractFunctionSnippet(path, filePath, content);
@@ -44,6 +48,7 @@ export class ASTParser {
           }
         },
         ArrowFunctionExpression: (path) => {
+          if (snippets.length >= this.maxSnippets) return;
           // Only extract if this is a top-level arrow function, not nested
           if (!path.parent || !t.isFunction(path.parent)) {
             const snippet = this.extractFunctionSnippet(path, filePath, content);
@@ -51,6 +56,7 @@ export class ASTParser {
           }
         },
         VariableDeclarator: (path) => {
+          if (snippets.length >= this.maxSnippets) return;
           if (path.node.init && t.isFunction(path.node.init)) {
             // Check if this is a React component (exported function with JSX)
             if (path.node.id && 
@@ -69,12 +75,14 @@ export class ASTParser {
           }
         },
         CallExpression: (path) => {
+          if (snippets.length >= this.maxSnippets) return;
           if (this.isStyleSheetCreate(path)) {
             const snippet = this.extractStyleSheetSnippet(path, filePath, content);
             if (snippet) snippets.push(snippet);
           }
         },
         JSXElement: (path) => {
+          if (snippets.length >= this.maxSnippets) return;
           // Only extract if this is a top-level JSX element, not nested
           if (!path.parent || !t.isJSXElement(path.parent)) {
             const snippet = this.extractComponentSnippet(path, filePath, content);
@@ -263,12 +271,22 @@ export class ASTParser {
   }
 
   private normalizeCode(code: string): string {
-    return code
-      .replace(/\s+/g, ' ') // Normalize whitespace
+    // Optimized normalization for better performance
+    let normalized = code;
+    
+    // Remove comments first (most expensive operation)
+    normalized = normalized
       .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
-      .replace(/\/\/.*$/gm, '') // Remove line comments
+      .replace(/\/\/.*$/gm, ''); // Remove line comments
+    
+    // Remove whitespace and normalize
+    normalized = normalized
+      .replace(/\s+/g, ' ') // Normalize whitespace
       .replace(/\s*([{}();,=])\s*/g, '$1') // Remove spaces around punctuation
-      .trim();
+      .replace(/\s+/g, '') // Remove all remaining whitespace
+      .toLowerCase(); // Convert to lowercase for case-insensitive comparison
+    
+    return normalized;
   }
 
   private generateHash(content: string): string {

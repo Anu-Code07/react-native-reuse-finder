@@ -3,23 +3,52 @@ import { CodeSnippet, DuplicateGroup } from '../types';
 export class SimilarityDetector {
   private kGramSize: number;
   private minSimilarity: number;
+  private fastMode: boolean;
 
-  constructor(kGramSize: number = 7, minSimilarity: number = 0.8) {
+  constructor(kGramSize: number = 7, minSimilarity: number = 0.8, fastMode: boolean = false) {
     this.kGramSize = kGramSize;
     this.minSimilarity = minSimilarity;
+    this.fastMode = fastMode;
   }
 
   findDuplicates(snippets: CodeSnippet[]): DuplicateGroup[] {
+    if (snippets.length === 0) return [];
+    
+    // Pre-filter by type for better performance
+    const snippetsByType = new Map<string, CodeSnippet[]>();
+    snippets.forEach(snippet => {
+      if (!snippetsByType.has(snippet.type)) {
+        snippetsByType.set(snippet.type, []);
+      }
+      snippetsByType.get(snippet.type)!.push(snippet);
+    });
+
     const groups: DuplicateGroup[] = [];
     const processed = new Set<string>();
 
-    for (let i = 0; i < snippets.length; i++) {
-      if (processed.has(snippets[i].id)) continue;
-
-      const group = this.findSimilarSnippets(snippets[i], snippets, i);
-      if (group.snippets.length > 1) {
-        groups.push(group);
-        group.snippets.forEach(snippet => processed.add(snippet.id));
+    // Process each type separately to reduce comparisons
+    for (const [type, typeSnippets] of snippetsByType) {
+      if (typeSnippets.length < 2) continue;
+      
+      // Use hash-based grouping for exact matches first (O(n))
+      const hashGroups = this.groupByHash(typeSnippets);
+      
+      for (const [hash, hashSnippets] of hashGroups) {
+        if (hashSnippets.length > 1) {
+          const group = this.createDuplicateGroup(hashSnippets, 1.0);
+          groups.push(group);
+          hashSnippets.forEach(snippet => processed.add(snippet.id));
+        }
+      }
+      
+      // For remaining snippets, use optimized similarity detection
+      const remainingSnippets = typeSnippets.filter(s => !processed.has(s.id));
+      if (remainingSnippets.length > 1) {
+        const similarityGroups = this.findSimilarSnippetsOptimized(remainingSnippets);
+        groups.push(...similarityGroups);
+        similarityGroups.forEach(group => 
+          group.snippets.forEach(snippet => processed.add(snippet.id))
+        );
       }
     }
 
@@ -58,18 +87,43 @@ export class SimilarityDetector {
   }
 
   private calculateSimilarity(snippet1: CodeSnippet, snippet2: CodeSnippet): number {
-    // Use multiple similarity metrics and combine them
-    const exactHashSimilarity = snippet1.hash === snippet2.hash ? 1.0 : 0.0;
+    // Fast path: exact hash match (most common case)
+    if (snippet1.hash === snippet2.hash) {
+      return 1.0;
+    }
+    
+    // Fast path: simhash similarity (good for near-duplicates)
     const simHashSimilarity = this.calculateSimHashSimilarity(snippet1.simHash, snippet2.simHash);
+    if (simHashSimilarity > 0.9) {
+      return simHashSimilarity;
+    }
+    
+    // In fast mode, skip expensive operations
+    if (this.fastMode) {
+      return simHashSimilarity;
+    }
+    
+    // Only do expensive operations for potential matches
+    if (simHashSimilarity < 0.5) {
+      return simHashSimilarity;
+    }
+    
+    // Calculate shingle similarity (medium cost)
     const shingleSimilarity = this.calculateShingleSimilarity(snippet1.normalizedContent, snippet2.normalizedContent);
+    
+    // Skip edit distance for very different content (most expensive operation)
+    if (shingleSimilarity < 0.3) {
+      return (simHashSimilarity + shingleSimilarity) / 2;
+    }
+    
+    // Only calculate edit distance for very similar content
     const editDistanceSimilarity = this.calculateEditDistanceSimilarity(snippet1.normalizedContent, snippet2.normalizedContent);
-
-    // Weighted combination of similarity metrics
+    
+    // Weighted combination for final similarity
     return (
-      exactHashSimilarity * 0.4 +
-      simHashSimilarity * 0.3 +
-      shingleSimilarity * 0.2 +
-      editDistanceSimilarity * 0.1
+      simHashSimilarity * 0.5 +
+      shingleSimilarity * 0.3 +
+      editDistanceSimilarity * 0.2
     );
   }
 
@@ -88,22 +142,40 @@ export class SimilarityDetector {
   }
 
   private calculateShingleSimilarity(content1: string, content2: string): number {
+    // Early exit for very different lengths
+    const lengthDiff = Math.abs(content1.length - content2.length);
+    const maxLength = Math.max(content1.length, content2.length);
+    if (lengthDiff / maxLength > 0.7) {
+      return 0.0;
+    }
+    
     const shingles1 = this.generateShingles(content1);
     const shingles2 = this.generateShingles(content2);
 
-    const intersection = new Set([...shingles1].filter(x => shingles2.has(x)));
-    const union = new Set([...shingles1, ...shingles2]);
-
-    return intersection.size / union.size;
+    // Use more efficient intersection calculation
+    let intersection = 0;
+    for (const shingle of shingles1) {
+      if (shingles2.has(shingle)) {
+        intersection++;
+      }
+    }
+    
+    const union = shingles1.size + shingles2.size - intersection;
+    return intersection / union;
   }
 
   private generateShingles(content: string): Set<string> {
     const shingles = new Set<string>();
     const tokens = content.split(/\s+/);
+    
+    // Limit shingles for performance
+    const maxShingles = 100;
+    let count = 0;
 
-    for (let i = 0; i <= tokens.length - this.kGramSize; i++) {
+    for (let i = 0; i <= tokens.length - this.kGramSize && count < maxShingles; i++) {
       const shingle = tokens.slice(i, i + this.kGramSize).join(' ');
       shingles.add(shingle);
+      count++;
     }
 
     return shingles;
@@ -198,5 +270,45 @@ export class SimilarityDetector {
     // This would generate actual code templates based on the snippets
     // For now, return a placeholder
     return `// Generated template for ${snippets[0].type}\n// Replace with actual implementation`;
+  }
+
+  // Performance optimization helper methods
+  private groupByHash(snippets: CodeSnippet[]): Map<string, CodeSnippet[]> {
+    const groups = new Map<string, CodeSnippet[]>();
+    snippets.forEach(snippet => {
+      if (!groups.has(snippet.hash)) {
+        groups.set(snippet.hash, []);
+      }
+      groups.get(snippet.hash)!.push(snippet);
+    });
+    return groups;
+  }
+
+  private createDuplicateGroup(snippets: CodeSnippet[], similarity: number): DuplicateGroup {
+    const reuseScore = this.calculateReuseScore(snippets, similarity);
+    return {
+      id: `group-${snippets[0].id}`,
+      snippets,
+      similarity,
+      reuseScore,
+      suggestion: this.generateSuggestion(snippets, similarity)
+    };
+  }
+
+  private findSimilarSnippetsOptimized(snippets: CodeSnippet[]): DuplicateGroup[] {
+    const groups: DuplicateGroup[] = [];
+    const processed = new Set<string>();
+
+    for (let i = 0; i < snippets.length; i++) {
+      if (processed.has(snippets[i].id)) continue;
+
+      const group = this.findSimilarSnippets(snippets[i], snippets, i);
+      if (group.snippets.length > 1) {
+        groups.push(group);
+        group.snippets.forEach(snippet => processed.add(snippet.id));
+      }
+    }
+
+    return groups;
   }
 }

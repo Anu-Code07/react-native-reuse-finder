@@ -47,6 +47,8 @@ export interface AnalysisOptions {
   maxResults: number;
   enableChurnWeighting: boolean;
   enableAutoFix: boolean;
+  fastMode?: boolean;
+  maxSnippetsPerFile?: number;
 }
 
 export interface AnalysisResult {

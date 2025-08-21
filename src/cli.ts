@@ -26,8 +26,11 @@ program
   .option('-o, --output <format>', 'Output format (json, table, summary)', 'table')
   .option('-f, --file <file>', 'Analyze specific file only')
   .option('-d, --directory <dir>', 'Analyze specific directory only')
+  .option('--fast', 'Enable fast mode (skip expensive similarity calculations)', false)
+  .option('--max-snippets <count>', 'Maximum snippets to analyze per file (default: 50)', '50')
   .action(async (projectPath, options) => {
     try {
+      const startTime = Date.now();
       const resolvedPath = path.resolve(projectPath);
       console.log(chalk.blue(`🔍 Analyzing React Native project at: ${resolvedPath}`));
 
@@ -53,7 +56,9 @@ program
         minSize: parseInt(options.minSize),
         maxResults: parseInt(options.maxResults),
         enableChurnWeighting: options.churn !== false,
-        enableAutoFix: options.autoFix !== false
+        enableAutoFix: options.autoFix !== false,
+        fastMode: options.fast || false,
+        maxSnippetsPerFile: parseInt(options.maxSnippets) || 50
       };
 
       let result;
@@ -68,29 +73,52 @@ program
           includeTypeScript: true,
           includeFlow: false,
           sourceType: 'unambiguous'
-        });
+        }, analysisOptions.maxSnippetsPerFile);
         
+        console.log(chalk.yellow('🔄 Parsing file...'));
         const content = await import('fs').then(fs => fs.readFileSync(filePath, 'utf-8'));
         const snippets = parser.parseFile(filePath, content);
+        console.log(chalk.green(`✅ Found ${snippets.length} code snippets`));
         
-        // Create similarity detector to find duplicates
-        const { SimilarityDetector } = await import('./similarity/similarity-detector');
-        const similarityDetector = new SimilarityDetector(7, analysisOptions.minSimilarity);
-        const duplicates = similarityDetector.findDuplicates(snippets);
-        
-        // Generate suggestions manually
-        const suggestions = duplicates.map(group => group.suggestion);
-        
-        result = {
-          duplicates,
-          summary: {
-            totalFiles: 1,
-            totalSnippets: snippets.length,
-            duplicateGroups: duplicates.length,
-            estimatedSavings: duplicates.reduce((sum: number, group: any) => sum + (group.snippets[0].size * (group.snippets.length - 1)), 0)
-          },
-          suggestions
-        };
+        if (snippets.length === 0) {
+          console.log(chalk.yellow('⚠️  No code snippets found to analyze'));
+          result = {
+            duplicates: [],
+            summary: {
+              totalFiles: 1,
+              totalSnippets: 0,
+              duplicateGroups: 0,
+              estimatedSavings: 0
+            },
+            suggestions: []
+          };
+        } else {
+          console.log(chalk.yellow('🔍 Detecting duplicates...'));
+          // Create similarity detector to find duplicates
+          const { SimilarityDetector } = await import('./similarity/similarity-detector');
+          const similarityDetector = new SimilarityDetector(7, analysisOptions.minSimilarity, analysisOptions.fastMode);
+          const duplicates = similarityDetector.findDuplicates(snippets);
+          console.log(chalk.green(`✅ Found ${duplicates.length} duplicate groups`));
+          
+          // Generate suggestions manually
+          const suggestions = duplicates.map(group => group.suggestion);
+          
+          result = {
+            duplicates,
+            summary: {
+              totalFiles: 1,
+              totalSnippets: snippets.length,
+              duplicateGroups: duplicates.length,
+              estimatedSavings: duplicates.reduce((sum: number, group: any) => sum + (group.snippets[0].size * (group.snippets.length - 1)), 0)
+            },
+            suggestions,
+            performance: {
+              fastMode: analysisOptions.fastMode,
+              maxSnippetsPerFile: analysisOptions.maxSnippetsPerFile,
+              analysisTime: Date.now() - startTime
+            }
+          };
+        }
       } else if (options.directory) {
         const dirPath = path.resolve(options.directory);
         console.log(chalk.blue(`📁 Analyzing specific directory: ${dirPath}`));
