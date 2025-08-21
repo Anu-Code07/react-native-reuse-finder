@@ -303,24 +303,6 @@ npm install
 npm run build
 npm test
 ```
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- [Babel](https://babeljs.io/) for AST parsing
-- [Commander.js](https://github.com/tj/commander.js) for CLI
-- [Chalk](https://github.com/chalk/chalk) for terminal colors
-- [Simple Git](https://github.com/steveukx/git-js) for git operations
-
-## 📞 Support
-
-- 📧 Email: your.email@example.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/react-native-reuse-finder/issues)
-- 📖 Documentation: [GitHub Wiki](https://github.com/yourusername/react-native-reuse-finder/wiki)
-
 ---
 
-Made with ❤️ for the React Native community
+Made with ❤️ by Anurag for the React Native community
