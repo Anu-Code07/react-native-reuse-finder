@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import * as path from 'path';
 import { ReuseAnalyzer } from './analyzer/reuse-analyzer';
 import { AnalysisOptions, SnippetType } from './types';
+import { SmartRefactorer } from './refactoring/smart-refactorer';
 
 const program = new Command();
 
@@ -23,12 +24,13 @@ program
   .option('-r, --max-results <count>', 'Maximum number of duplicate groups to return', '50')
   .option('--no-churn', 'Disable churn analysis')
   .option('--no-auto-fix', 'Disable auto-fix suggestions')
-  .option('-o, --output <format>', 'Output format (json, table, summary, code)', 'table')
+  .option('-o, --output <format>', 'Output format (json, table, summary, code, smart) - smart merges duplicates into flexible functions', 'table')
   .option('-f, --file <file>', 'Analyze specific file only')
   .option('-d, --directory <dir>', 'Analyze specific directory only')
   .option('--fast', 'Enable fast mode (skip expensive similarity calculations)', false)
   .option('--max-snippets <count>', 'Maximum snippets to analyze per file (default: 50)', '50')
   .option('--output-file <path>', 'Output results to file (works with json and code formats)')
+  .option('--smart', 'Enable smart refactoring that merges duplicate functions', false)
   .action(async (projectPath, options) => {
     try {
       const startTime = Date.now();
@@ -245,6 +247,10 @@ function outputResults(result: any, format: string, outputFile?: string) {
       output = outputCode(result);
       break;
       
+    case 'smart':
+      output = outputSmart(result, true);
+      break;
+      
     case 'summary':
       outputSummary(result);
       return;
@@ -268,6 +274,53 @@ function outputResults(result: any, format: string, outputFile?: string) {
       console.error(chalk.red(`\n❌ Failed to write to file: ${error}`));
     }
   }
+}
+
+function outputSmart(result: any, smartMode: boolean): string {
+  if (!smartMode) {
+    return outputCode(result);
+  }
+  
+  const smartRefactorer = new SmartRefactorer();
+  let output = '';
+  
+  output += '🧠 SMART REFACTORING ANALYSIS\n';
+  output += '='.repeat(50) + '\n\n';
+  
+  if (result.duplicates.length === 0) {
+    output += 'No duplicates found to refactor.\n';
+    return output;
+  }
+  
+  // Group duplicates by type
+  const duplicatesByType = new Map();
+  result.duplicates.forEach((group: any) => {
+    const type = group.snippets[0].type;
+    if (!duplicatesByType.has(type)) {
+      duplicatesByType.set(type, []);
+    }
+    duplicatesByType.get(type).push(group);
+  });
+  
+  // Generate smart refactored code for each type
+  for (const [type, groups] of duplicatesByType) {
+    output += `// ========== ${type.toUpperCase()} SMART REFACTORING ==========\n\n`;
+    
+    groups.forEach((group: any, index: number) => {
+      const mergedFunction = smartRefactorer.generateMergedFunctions(group);
+      
+      if (mergedFunction) {
+        output += `// ${mergedFunction.name} - ${mergedFunction.description}\n`;
+        output += `// Props: ${mergedFunction.props.join(', ')}\n`;
+        output += `// Variants: ${mergedFunction.variants.join(', ')}\n\n`;
+        output += mergedFunction.code;
+        output += '\n\nexport { ' + mergedFunction.name + ' };\n\n';
+        output += '// ===== END ' + mergedFunction.name + ' =====\n\n';
+      }
+    });
+  }
+  
+  return output;
 }
 
 function outputCode(result: any): string {
@@ -414,41 +467,81 @@ function generateCleanRefactoredCode(snippet: any, componentName: string): strin
   let output = '';
   
   if (type === 'component') {
-    // For components, try to extract the component definition properly
-    const componentMatch = content.match(/(?:const|function)\s+(\w+)\s*=.*?(?:\{[\s\S]*?\}\s*;|=>[\s\S]*?;)/);
-    if (componentMatch) {
-      // Use the full component definition
-      output = componentMatch[0];
-      // Replace component name with generic name
-      output = output.replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+    // For components, extract the full component definition
+    // Look for export const/function pattern with full function body
+    const exportMatch = content.match(/export\s+(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+    if (exportMatch) {
+      // Extract the component definition and replace the name
+      const componentDef = exportMatch[0].replace(/export\s+(?:const|function)\s+\w+/, `const ${componentName}`);
+      output = componentDef;
     } else {
-      // Fallback: try to wrap JSX content as a component
-      if (content.includes('<') && content.includes('>')) {
-        output = `const ${componentName} = ({ title, onPress }) => {\n  return (\n    ${cleanCode}\n  );\n};`;
+      // Fallback: look for const/function pattern without export
+      const componentMatch = content.match(/(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+      if (componentMatch) {
+        const componentDef = componentMatch[0].replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+        output = componentDef;
       } else {
-        output = `const ${componentName} = ${cleanCode}`;
+        // Last resort: wrap JSX content
+        const jsxContent = content.replace(/export\s+/, '').trim();
+        output = `const ${componentName} = (props) => {\n  return (\n    ${jsxContent}\n  );\n};`;
       }
     }
   } else if (type === 'hook') {
-    // For hooks, extract the hook definition
-    const hookMatch = content.match(/(?:const|function)\s+(\w+)\s*=.*?(?:\{[\s\S]*?\}|=>[\s\S]*?;)/);
-    if (hookMatch) {
-      output = hookMatch[0];
-      output = output.replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+    // For hooks, extract the full hook definition
+    const exportMatch = content.match(/export\s+(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+    if (exportMatch) {
+      const hookDef = exportMatch[0].replace(/export\s+(?:const|function)\s+\w+/, `const ${componentName}`);
+      output = hookDef;
     } else {
-      output = `const ${componentName} = ${cleanCode}`;
+      const hookMatch = content.match(/(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+      if (hookMatch) {
+        const hookDef = hookMatch[0].replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+        output = hookDef;
+      } else {
+        output = `const ${componentName} = ${content.replace(/export\s+/, '').trim()}`;
+      }
     }
   } else if (type === 'stylesheet') {
-    // For stylesheets, create a clean StyleSheet.create
-    output = `const ${componentName} = StyleSheet.create(${cleanCode});`;
-  } else {
-    // For other types (functions, utilities), wrap appropriately
-    if (cleanCode.includes('=>') || cleanCode.includes('function')) {
-      output = cleanCode.includes('const ') ? cleanCode : `const ${componentName} = ${cleanCode}`;
+    // For stylesheets, extract the StyleSheet.create content
+    const styleMatch = content.match(/StyleSheet\.create\(([\s\S]*?)\)/);
+    if (styleMatch) {
+      output = `const ${componentName} = StyleSheet.create(${styleMatch[1]});`;
     } else {
-      output = `const ${componentName} = ${cleanCode};`;
+      output = `const ${componentName} = StyleSheet.create(${content.replace(/export\s+/, '').trim()});`;
+    }
+  } else if (type === 'function') {
+    // For functions, extract the full function definition
+    const exportMatch = content.match(/export\s+(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+    if (exportMatch) {
+      const funcDef = exportMatch[0].replace(/export\s+(?:const|function)\s+\w+/, `const ${componentName}`);
+      output = funcDef;
+    } else {
+      const funcMatch = content.match(/(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+      if (funcMatch) {
+        const funcDef = funcMatch[0].replace(/(?:const|function)\s+\w+/, `const ${componentName}`);
+        output = funcDef;
+      } else {
+        output = `const ${componentName} = ${content.replace(/export\s+/, '').trim()}`;
+      }
+    }
+  } else {
+    // For other types, try to extract the definition
+    const exportMatch = content.match(/export\s+(?:const|function)\s+\w+\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\};/);
+    if (exportMatch) {
+      const def = exportMatch[0].replace(/export\s+(?:const|function)\s+\w+/, `const ${componentName}`);
+      output = def;
+    } else {
+      output = `const ${componentName} = ${content.replace(/export\s+/, '').trim()}`;
     }
   }
+  
+  // Clean up the output
+  output = output
+    .replace(/\/\/.*$/gm, '') // Remove single-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
+    .replace(/\n{3,}/g, '\n\n') // Normalize spacing
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .trim();
   
   // Add export statement at the end
   output += `\n\nexport { ${componentName} };`;

@@ -35,14 +35,7 @@ export class ASTParser {
       const extractedLocations = new Set<string>(); // Track already extracted locations
       
       traverse(ast, {
-        FunctionDeclaration: (path) => {
-          if (snippets.length >= this.maxSnippets) return;
-          const snippet = this.extractFunctionSnippet(path, filePath, content);
-          if (snippet && !extractedLocations.has(snippet.id)) {
-            snippets.push(snippet);
-            extractedLocations.add(snippet.id);
-          }
-        },
+
         FunctionExpression: (path) => {
           if (snippets.length >= this.maxSnippets) return;
           // Only extract if this is a top-level function expression, not nested
@@ -54,27 +47,12 @@ export class ASTParser {
             }
           }
         },
-        ArrowFunctionExpression: (path) => {
-          if (snippets.length >= this.maxSnippets) return;
-          // Only extract if this is a top-level arrow function, not nested
-          if (!path.parent || !t.isFunction(path.parent)) {
-            const snippet = this.extractFunctionSnippet(path, filePath, content);
-            if (snippet && !extractedLocations.has(snippet.id)) {
-              snippets.push(snippet);
-              extractedLocations.add(snippet.id);
-            }
-          }
-        },
+
         VariableDeclarator: (path) => {
           if (snippets.length >= this.maxSnippets) return;
           if (path.node.init && t.isFunction(path.node.init)) {
-            // Check if this is a React component (exported function with JSX)
-            if (path.node.id && 
-                'name' in path.node.id && 
-                typeof path.node.id.name === 'string' &&
-                (path.node.id.name.endsWith('Component') || 
-                 path.node.id.name.startsWith('Button') ||
-                 path.node.id.name.startsWith('ButtonV2'))) {
+            // Check if this is a React component (returns JSX)
+            if (this.returnsJSX(path.node.init)) {
               // Extract the entire component including the variable declaration
               const snippet = this.extractComponentSnippet(path, filePath, content);
               if (snippet && !extractedLocations.has(snippet.id)) {
@@ -82,7 +60,8 @@ export class ASTParser {
                 extractedLocations.add(snippet.id);
               }
             } else {
-              const snippet = this.extractFunctionSnippet(path.node.init, filePath, content);
+              // Extract the entire variable declaration, not just the function
+              const snippet = this.extractVariableSnippet(path, filePath, content);
               if (snippet && !extractedLocations.has(snippet.id)) {
                 snippets.push(snippet);
                 extractedLocations.add(snippet.id);
@@ -100,17 +79,26 @@ export class ASTParser {
             }
           }
         },
-        JSXElement: (path) => {
+        
+        FunctionDeclaration: (path) => {
           if (snippets.length >= this.maxSnippets) return;
-          // Only extract if this is a top-level JSX element, not nested
-          if (!path.parent || !t.isJSXElement(path.parent)) {
+          
+          // Check if it's a component (returns JSX)
+          if (this.returnsJSX(path)) {
             const snippet = this.extractComponentSnippet(path, filePath, content);
             if (snippet && !extractedLocations.has(snippet.id)) {
               snippets.push(snippet);
               extractedLocations.add(snippet.id);
             }
+          } else {
+            // Extract the function
+            const snippet = this.extractFunctionSnippet(path, filePath, content);
+            if (snippet && !extractedLocations.has(snippet.id)) {
+              snippets.push(snippet);
+              extractedLocations.add(snippet.id);
+            }
           }
-        }
+        },
       });
 
       return snippets;
@@ -124,11 +112,34 @@ export class ASTParser {
     const node = path.node;
     if (!node.loc) return null;
 
-    // For components, extract only the component itself, not the entire file
-    const startLine = node.loc.start.line;
-    const endLine = node.loc.end.line;
+    // For components, extract the full component definition
+    let startLine = node.loc.start.line;
+    let endLine = node.loc.end.line;
     
-    // Extract only the component code, not expanding to include styles or exports
+    // If this is a VariableDeclarator, we need to capture the entire declaration
+    if (path.isVariableDeclarator()) {
+      // Get the parent VariableDeclaration to capture the full export statement
+      const parentPath = path.parentPath;
+      if (parentPath && parentPath.isVariableDeclaration()) {
+        startLine = parentPath.node.loc.start.line;
+        endLine = parentPath.node.loc.end.line;
+        
+        // Also check if there's an export statement above
+        const grandParentPath = parentPath.parentPath;
+        if (grandParentPath && grandParentPath.isExportNamedDeclaration()) {
+          startLine = grandParentPath.node.loc.start.line;
+        }
+      }
+    }
+    
+    // If this is a FunctionDeclaration, also check for export
+    if (path.isFunctionDeclaration()) {
+      const parentPath = path.parentPath;
+      if (parentPath && parentPath.isExportNamedDeclaration()) {
+        startLine = parentPath.node.loc.start.line;
+      }
+    }
+    
     const code = this.extractCodeRange(content, startLine, endLine);
     
     if (!code || code.length < 50) return null; // Skip very small components
@@ -154,13 +165,52 @@ export class ASTParser {
     const node = path.node;
     if (!node || !node.body || !node.loc) return null;
 
-    const startLine = node.loc.start.line;
-    const endLine = node.loc.end.line;
+    // For functions, extract the full function definition
+    let startLine = node.loc.start.line;
+    let endLine = node.loc.end.line;
+    
+    // If this is a FunctionExpression inside a VariableDeclarator, capture the full declaration
+    if (path.parentPath && path.parentPath.isVariableDeclarator()) {
+      const parentPath = path.parentPath.parentPath;
+      if (parentPath && parentPath.isVariableDeclaration()) {
+        startLine = parentPath.node.loc.start.line;
+        endLine = parentPath.node.loc.end.line;
+      }
+    }
+    
     const code = this.extractCodeRange(content, startLine, endLine);
     
     if (!code || code.length < 30) return null; // Skip very small functions
 
     const snippetType = this.determineFunctionType(path);
+    const normalizedContent = this.normalizeCode(code);
+    
+    return {
+      id: `${filePath}:${startLine}-${endLine}`,
+      content: code,
+      normalizedContent,
+      type: snippetType,
+      filePath,
+      startLine,
+      endLine,
+      size: code.length,
+      hash: this.generateHash(normalizedContent),
+      simHash: this.generateSimHash(normalizedContent),
+      churnWeight: 1.0 // Will be updated by churn analyzer
+    };
+  }
+
+  private extractVariableSnippet(path: any, filePath: string, content: string): CodeSnippet | null {
+    const node = path.node;
+    if (!node || !node.loc) return null;
+
+    const startLine = node.loc.start.line;
+    const endLine = node.loc.end.line;
+    const code = this.extractCodeRange(content, startLine, endLine);
+    
+    if (!code || code.length < 30) return null; // Skip very small variables
+
+    const snippetType = this.determineFunctionType(path.node.init);
     const normalizedContent = this.normalizeCode(code);
     
     return {
@@ -207,7 +257,7 @@ export class ASTParser {
 
   private determineFunctionType(path: any): SnippetType {
     // Check if it's a React hook
-    if (path.node.id && path.node.id.name && path.node.id.name.startsWith('use')) {
+    if (path && path.node && path.node.id && path.node.id.name && path.node.id.name.startsWith('use')) {
       return SnippetType.HOOK;
     }
 
@@ -230,27 +280,48 @@ export class ASTParser {
   }
 
   private returnsJSX(path: any): boolean {
-    let returnsJSX = false;
-    path.traverse({
-      ReturnStatement: (returnPath: any) => {
-        if (t.isJSXElement(returnPath.node.argument) || 
-            t.isJSXFragment(returnPath.node.argument)) {
-          returnsJSX = true;
+    // Check if the function returns JSX
+    if (path && path.node && path.node.body) {
+      // For arrow functions with expression body
+      if (path.node.body.type === 'JSXElement') {
+        return true;
+      }
+      
+      // For functions with block body, check if they return JSX
+      if (path.node.body.type === 'BlockStatement') {
+        // Look for return statements with JSX
+        for (const statement of path.node.body.body) {
+          if (statement.type === 'ReturnStatement' && statement.argument) {
+            if (statement.argument.type === 'JSXElement') {
+              return true;
+            }
+            // Also check if the return value contains JSX
+            const returnContent = JSON.stringify(statement.argument);
+            if (returnContent.includes('<') && returnContent.includes('>')) {
+              return true;
+            }
+          }
         }
       }
-    });
-    return returnsJSX;
+      
+      // Fallback: check if body contains JSX
+      const bodyContent = JSON.stringify(path.node.body);
+      return bodyContent.includes('<') && bodyContent.includes('>');
+    }
+    return false;
   }
 
   private isAnimationFunction(path: any): boolean {
-    const functionName = path.node.id?.name || '';
+    if (!path || !path.node || !path.node.id) return false;
+    const functionName = path.node.id.name || '';
     return functionName.includes('Animation') || 
            functionName.includes('animate') ||
            functionName.includes('motion');
   }
 
   private isAPIClientFunction(path: any): boolean {
-    const functionName = path.node.id?.name || '';
+    if (!path || !path.node || !path.node.id) return false;
+    const functionName = path.node.id.name || '';
     return functionName.includes('fetch') || 
            functionName.includes('api') ||
            functionName.includes('request');
@@ -270,20 +341,21 @@ export class ASTParser {
   }
 
   private normalizeCode(code: string): string {
-    // Optimized normalization for better performance
+    // Less aggressive normalization for better duplicate detection
     let normalized = code;
     
-    // Remove comments first (most expensive operation)
+    // Remove comments first
     normalized = normalized
       .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
       .replace(/\/\/.*$/gm, ''); // Remove line comments
     
-    // Remove whitespace and normalize
+    // Normalize whitespace but preserve structure
     normalized = normalized
-      .replace(/\s+/g, ' ') // Normalize whitespace
-      .replace(/\s*([{}();,=])\s*/g, '$1') // Remove spaces around punctuation
-      .replace(/\s+/g, '') // Remove all remaining whitespace
-      .toLowerCase(); // Convert to lowercase for case-insensitive comparison
+      .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
+      .trim(); // Remove leading/trailing whitespace
+    
+    // Convert to lowercase for case-insensitive comparison
+    normalized = normalized.toLowerCase();
     
     return normalized;
   }

@@ -5,7 +5,7 @@ export class SimilarityDetector {
   private minSimilarity: number;
   private fastMode: boolean;
 
-  constructor(kGramSize: number = 7, minSimilarity: number = 0.8, fastMode: boolean = false) {
+  constructor(kGramSize: number = 7, minSimilarity: number = 0.6, fastMode: boolean = false) {
     this.kGramSize = kGramSize;
     this.minSimilarity = minSimilarity;
     this.fastMode = fastMode;
@@ -70,14 +70,13 @@ export class SimilarityDetector {
       // Skip if this is the same snippet (same file, same lines)
       if (snippet.id === target.id) continue;
       
-      // Skip if this is the same content in the same file
+      // Skip if this is the same snippet (same file, same lines)
+      if (snippet.id === target.id) continue;
+      
+      // Skip if this is the same content in the same file (exact same location)
       if (snippet.filePath === target.filePath && 
           snippet.startLine === target.startLine && 
           snippet.endLine === target.endLine) continue;
-      
-      // Skip if this is essentially the same location (within a few lines)
-      if (snippet.filePath === target.filePath && 
-          Math.abs(snippet.startLine - target.startLine) < 5) continue;
 
       const similarity = this.calculateSimilarity(target, snippet);
       if (similarity >= this.minSimilarity) {
