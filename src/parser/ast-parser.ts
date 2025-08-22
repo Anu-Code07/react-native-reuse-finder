@@ -142,7 +142,7 @@ export class ASTParser {
     
     const code = this.extractCodeRange(content, startLine, endLine);
     
-    if (!code || code.length < 50) return null; // Skip very small components
+    if (!code || code.length < 20) return null; // Skip very small components
 
     const normalizedContent = this.normalizeCode(code);
     
@@ -180,7 +180,7 @@ export class ASTParser {
     
     const code = this.extractCodeRange(content, startLine, endLine);
     
-    if (!code || code.length < 30) return null; // Skip very small functions
+    if (!code || code.length < 15) return null; // Skip very small functions
 
     const snippetType = this.determineFunctionType(path);
     const normalizedContent = this.normalizeCode(code);
@@ -208,7 +208,7 @@ export class ASTParser {
     const endLine = node.loc.end.line;
     const code = this.extractCodeRange(content, startLine, endLine);
     
-    if (!code || code.length < 30) return null; // Skip very small variables
+    if (!code || code.length < 15) return null; // Skip very small variables
 
     const snippetType = this.determineFunctionType(path.node.init);
     const normalizedContent = this.normalizeCode(code);
@@ -361,9 +361,19 @@ export class ASTParser {
   }
 
   private generateHash(content: string): string {
+    // Extract just the function body for more accurate duplicate detection
+    let functionBody = content;
+    
+    // Remove export statement and function declaration, keep only the body
+    functionBody = functionBody.replace(/export\s+const\s+\w+\s*=\s*\([^)]*\)\s*=>\s*/, '');
+    functionBody = functionBody.replace(/export\s+function\s+\w+\s*\([^)]*\)\s*/, '');
+    
+    // Remove the closing semicolon if present
+    functionBody = functionBody.replace(/;$/, '');
+    
     let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-      const char = content.charCodeAt(i);
+    for (let i = 0; i < functionBody.length; i++) {
+      const char = functionBody.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
       hash = hash & hash; // Convert to 32-bit integer
     }

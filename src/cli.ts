@@ -20,7 +20,7 @@ program
   .argument('[path]', 'Path to the project directory', '.')
   .option('-t, --types <types>', 'Comma-separated list of snippet types to analyze', 'component,hook,stylesheet,utility')
   .option('-s, --similarity <threshold>', 'Minimum similarity threshold (0.0-1.0)', '0.8')
-  .option('-m, --min-size <size>', 'Minimum snippet size in characters', '100')
+  .option('-m, --min-size <size>', 'Minimum snippet size in characters', '20')
   .option('-r, --max-results <count>', 'Maximum number of duplicate groups to return', '50')
   .option('--no-churn', 'Disable churn analysis')
   .option('--no-auto-fix', 'Disable auto-fix suggestions')
